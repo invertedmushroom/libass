@@ -217,6 +217,11 @@ struct render_context {
     ASS_Event *event;
     ASS_Style *style;
 
+ 
+
+    bool explicit_word_break_pending;  // Added for word break tag support
+
+
     ASS_Font *font;
     double font_size;
     int parsed_tags;
@@ -345,6 +350,7 @@ struct ass_renderer {
 typedef struct render_priv {
     int top, height, left, width;
     int render_id;
+    int collision_shift;
 } RenderPriv;
 
 typedef struct {
@@ -361,5 +367,16 @@ ASS_Vector ass_layout_res(ASS_Renderer *render_priv);
 
 // XXX: this is actually in ass.c, includes should be fixed later on
 void ass_lazy_track_init(ASS_Library *lib, ASS_Track *track);
+
+/**
+ * \brief Render a single event
+ * \param state render context
+ * \param event event to render
+ * \param event_images output images will be stored here
+ * \param word_positions if not NULL, word position information will be stored here
+ * \return true if rendering was successful
+ */
+bool ass_render_event(RenderContext *state, ASS_Event *event,
+                     EventImages *event_images, ASS_EventWordPositions **word_positions);
 
 #endif /* LIBASS_RENDER_H */

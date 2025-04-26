@@ -848,6 +848,101 @@ void *ass_malloc(size_t size);
  */
 void ass_free(void *ptr);
 
+/**
+ * \brief Information about a word in a rendered subtitle
+ */
+typedef struct {
+    /**
+     * \brief Position of word's left edge (pixels)
+     */
+    int x;
+    
+    /**
+     * \brief Position of word's top edge (pixels)
+     */
+    int y;
+    
+    /**
+     * \brief Width of word (pixels)
+     */
+    int width;
+    
+    /**
+     * \brief Height of word (pixels)
+     */
+    int height;
+    
+    /**
+     * \brief Original text of the word
+     */
+    char *text;
+} ASS_WordInfo;
+
+/**
+ * \brief Word positions for an event
+ */
+typedef struct {
+    /**
+     * \brief ID of the event
+     */
+    int event_id;
+    
+    /**
+     * \brief Text with formatting stripped
+     */
+    char *stripped_text;
+    
+    /**
+     * \brief Array of words with positions
+     */
+    ASS_WordInfo *words;
+    
+    /**
+     * \brief Number of words in array
+     */
+    int n_words;
+} ASS_EventWordPositions;
+
+/**
+ * \brief Word positions for all events in a frame
+ */
+typedef struct {
+    /**
+     * \brief Array of event word positions
+     */
+    ASS_EventWordPositions *event_positions;
+    
+    /**
+     * \brief Number of events
+     */
+    int n_events;
+} ASS_WordPositions;
+
+/**
+ * \brief Render a frame and get word positions
+ * \param priv renderer
+ * \param track track
+ * \param now current video timestamp (ms)
+ * \param detect_change compare to the previous call and set to 1
+ * if positions may have changed, or set to 2 if content may have changed.
+ * \return word positions for the current frame
+ */
+ASS_WordPositions *ass_render_frame_with_positions(ASS_Renderer *priv, 
+                                                   ASS_Track *track,
+                                                   long long now, 
+                                                   int *detect_change);
+
+/**
+ * \brief Free word positions structure
+ * \param positions word positions to free
+ */
+void ass_free_positions(ASS_WordPositions *positions);
+
+/**
+ * \brief Flags for glyph word boundaries
+ */
+#define GFLAG_WORD_BREAK (1 << 16)
+
 #undef ASS_DEPRECATED
 #undef ASS_DEPRECATED_ENUM
 

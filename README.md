@@ -1,71 +1,70 @@
-libass [![Coverity scan build status](https://scan.coverity.com/projects/3531/badge.svg)](https://scan.coverity.com/projects/3531) [![Build status](https://github.com/libass/libass/actions/workflows/ghci.yml/badge.svg?branch=master&event=push)](https://github.com/libass/libass/actions/workflows/ghci.yml?query=branch%3Amaster+event%3Apush)
-======
-libass is a portable subtitle renderer for the ASS/SSA (Advanced Substation Alpha/Substation Alpha) subtitle format. It is mostly compatible with VSFilter.
+Summary of Changes  
+Iterates over the glyphs in visual order to finalize word when encountering space.  
+Outputs each word text and position.  
+For scripts where “word” is ambiguous (e.g. Japanese), manual word boundaries (via explicit tags) are necessary.  
+Added new explicit word boundary tag ({\wb}).  
 
-Get it
-======
-See [GitHub releases](https://github.com/libass/libass/releases) for the latest release 0.17.3 (released 2024-07-02).
-See the [changelog](https://github.com/libass/libass/blob/master/Changelog) for a detailed list of changes.
+Output example:
+![Output image example](composite_output_cpp.png)
 
-Source code is available from our [GitHub repository](https://github.com/libass/libass).
+Extracted 6 events with word positions:
 
-Contact
-=======
-Please use the [issue tracker](https://github.com/libass/libass/issues?state=open) to report bugs or feature requests.
+Event 0 stripped text: Hello World  
+  Word: 'Hello' at (524,645) size 101x49  
+  Word: 'World' at (638,645) size 116x49  
 
-We have an IRC channel, too. Talk to us on [irc.libera.chat/#libass](https://web.libera.chat/#libass). Note that we cannot be online all the time and we cannot answer IRC questions if you leave the channel. Even if you do not get an immediate response, keep your IRC client open, and we will eventually get back to you.
+  Event 1 stripped text: Italic text with colored text. This text is defined at the same time as "Hello world" without newline character.  
+  Word: 'Italic' at (121,535) size 92x49
+  Word: 'text' at (225,535) size 72x49
+  Word: 'with' at (312,535) size 79x49
+  Word: 'colored' at (404,535) size 146x49
+  Word: 'text.' at (563,535) size 84x49
+  Word: 'This' at (660,535) size 85x49
+  Word: 'text' at (758,535) size 71x49
+  Word: 'is' at (842,535) size 32x49
+  Word: 'defined' at (887,535) size 146x49
+  Word: 'at' at (1046,535) size 37x49
+  Word: 'the' at (1096,535) size 61x49
+  Word: 'same' at (109,585) size 109x49
+  Word: 'time' at (231,585) size 84x49
+  Word: 'as' at (328,585) size 47x49
+  Word: '"Hello' at (388,585) size 117x49
+  Word: 'world"' at (518,585) size 122x49
+  Word: 'without' at (653,585) size 141x49
+  Word: 'newline' at (807,585) size 151x49
+  Word: 'character.' at (971,585) size 198x49  
 
-Building
-========
+Event 2 stripped text: Top left text  
+  Word: 'Top' at (33,25) size 76x49
+  Word: 'left' at (122,25) size 60x49
+  Word: 'text' at (195,25) size 71x49  
 
-libass offers two build systems to choose from: Autotools and Meson.
+Event 3 stripped text: Top right text  
+  Word: 'Top' at (985,25) size 76x49
+  Word: 'right' at (1074,25) size 87x49
+  Word: 'text' at (1174,25) size 72x49  
 
-Autotools is preferred for development since it integrates with our testing
-infrastructure and is feature-complete on all platforms supported by Autotools.  
-If you are packaging libass for distribution, Autotools is recommended;
-when packaging for Windows Meson should work equally well.
+Event 4 stripped text: مرحبابالعالم–مثالRTL.  
+  Word: 'ابحرم' at (456,475) size 84x49
+  Word: 'بملاعلا' at (540,475) size 102x49
+  Word: '–' at (643,475) size 0x49
+  Word: 'ملاث' at (667,475) size 58x49
+  Word: 'RTL' at (726,475) size 84x49
+  Word: '.' at (811,475) size 0x49  
 
-Meson lacks integration with testing infrastructure, but works otherwise well on
-Windows. It is suited for static-only builds on any platform well supported by
-Meson and as a Meson subproject.
-Notably, Meson supports MSVC and generation of VS project files.
+Event 5 stripped text: 普通にやってたのに…\N普通にやってたのに…  
+  Word: '普通にやってたのに…' at (476,369) size 327x49  
+  Word: '普通に' at (476,420) size 104x49
+  Word: 'やってた' at (581,420) size 116x49
+  Word: 'のに' at (697,420) size 61x49
+  Word: '…' at (759,420) size 0x49
 
-Macro defines
--------------
+Notes:  
+BRAILLE PATTERN BLANK "⠀" for connecting spaces to words  
+U+2800
 
-Unless developing libass there’s usually no need to manually define macros
-and there are no stability guarantees for these manual defines.
+Zero-width-space "​​​​" works as alternative to {\wb} tag.  
+U+200B
 
-- `DEBUG_LEVEL=0..3`
-  - `0` use the default set of asserts; implied if macro is not defined at all
-  - `1`, `2` *unused*
-  - `3` additionally assert assumptions usually pledged to the compiler for optimization purposes
-
-Information about the ASS format:
-=================================
-- [ASS format overview](https://github.com/libass/libass/wiki/ASS-File-Format-Guide)
-- [ASS override tags (Aegisub manual)](http://docs.aegisub.org/latest/ASS_Tags/)
-- [VSFilter source code (Guliverkli2)](http://sourceforge.net/p/guliverkli2/code/HEAD/tree/src/subtitles/)
-
-Other ASS/SSA implementations:
-==============================
-- VSFilter:
-  - [xy-VSFilter/XySubFilter](https://github.com/Cyberbeing/xy-VSFilter/)
-    - [pfmod](https://github.com/pinterf/xy-VSFilter/)
-  - VSFilter in [MPC-HC](https://github.com/clsid2/mpc-hc/tree/develop/src/filters/transform/VSFilter/)
-  - [VSFilterMod](https://code.google.com/archive/p/vsfiltermod/) with custom format extensions (defunct, subsumed by forks)
-    - [sorayuki fork](https://github.com/sorayuki/VSFilterMod/) with some bugfixes (defunct)
-    - various forks focussing on internal use
-  - [Threaded VSFilter](https://code.google.com/p/threaded-vsfilter/) (defunct)
-  - VSFilter in [Guliverkli2](http://sourceforge.net/projects/guliverkli2/) (defunct, subsumed by all of the above)
-  - VSFilter in [guliverkli](http://sourceforge.net/projects/guliverkli/) (defunct, forked as Guliverkli2)
-- [ffdshow](http://ffdshow-tryout.sourceforge.net/) (defunct)
-- [Perian](https://github.com/MaddTheSane/perian) (defunct)
-- [asa](https://web.archive.org/web/20110906033709/http://asa.diac24.net/) (defunct)
-- [libjass](https://github.com/Arnavion/libjass) (defunct)
-- [ASS.js](https://github.com/weizhenye/ASS)
-
-Packaging status
-================
-
-[![Packaging status](https://repology.org/badge/vertical-allrepos/libass.svg?columns=3&header=libass&exclude_unsupported=1)](https://repology.org/project/libass/versions)
+Stripped text still contains "\N" new line character  
+Dialogue: 0,0:00:00.00,0:00:10.00,Default,,0,0,0,,{\pos(320,240)}{\fs20}かん{\fs25}\N​漢 // Event n stripped text: "かん\N漢"

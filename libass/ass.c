@@ -1863,3 +1863,73 @@ void ass_lazy_track_init(ASS_Library *lib, ASS_Track *track)
         }
     }
 }
+
+ASS_WordPositions *ass_render_frame_with_positions(ASS_Renderer *priv, ASS_Track *track,
+                                                  long long now, int *detect_change)
+{
+    // Get normal rendered image first (this also updates internal state we need)
+    ass_render_frame(priv, track, now, detect_change);
+    
+    // Initialize word positions structure
+    ASS_WordPositions *positions = calloc(1, sizeof(ASS_WordPositions));
+    if (!positions)
+        return NULL;
+        
+    // Find events visible at this timestamp
+    int event_count = 0;
+    for (int i = 0; i < track->n_events; i++) {
+        ASS_Event *event = track->events + i;
+        if ((event->Start <= now) && (now < (event->Start + event->Duration))) {
+            event_count++;
+        }
+    }
+    
+    positions->event_positions = calloc(event_count, sizeof(ASS_EventWordPositions));
+    if (!positions->event_positions) {
+        free(positions);
+        return NULL;
+    }
+    positions->n_events = event_count;
+    
+    // Re-render each event and extract word positions
+    event_count = 0;
+    for (int i = 0; i < track->n_events; i++) {
+        ASS_Event *event = track->events + i;
+        if ((event->Start <= now) && (now < (event->Start + event->Duration))) {
+            EventImages event_images = {0};
+            ASS_EventWordPositions *word_positions = NULL;
+            
+            // Re-render the event with word position extraction
+            if (ass_render_event(&priv->state, event, &event_images, &word_positions)) {
+                if (word_positions) {
+                    memcpy(&positions->event_positions[event_count++], word_positions, 
+                           sizeof(ASS_EventWordPositions));
+                    free(word_positions); // We copied the content, free the container
+                }
+            }
+        }
+    }
+    
+    return positions;
+}
+
+void ass_free_positions(ASS_WordPositions *positions)
+{
+    if (!positions)
+        return;
+        
+    for (int i = 0; i < positions->n_events; i++) {
+        ASS_EventWordPositions *event_pos = &positions->event_positions[i];
+        if (event_pos->stripped_text)
+            free(event_pos->stripped_text);
+            
+        if (event_pos->words) {
+            for (int j = 0; j < event_pos->n_words; j++)
+                free(event_pos->words[j].text);
+            free(event_pos->words);
+        }
+    }
+    
+    free(positions->event_positions);
+    free(positions);
+}

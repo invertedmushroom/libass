@@ -914,7 +914,11 @@ char *ass_parse_tags(RenderContext *state, char *p, char *end, double pwr,
             else
                 val = state->style->Encoding;
             state->font_encoding = val;
+        // Check for word break tag
+        } else if (tag("wb")) { 
+            state->explicit_word_break_pending = true;
         }
+        
     }
 
     return p;

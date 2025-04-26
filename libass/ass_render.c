@@ -47,6 +47,7 @@
 #define SUBPIXEL_ORDER 3  // ~ log2(64 / POSITION_PRECISION)
 #define BLUR_PRECISION (1.0 / 256)  // blur error as fraction of full input range
 
+static ASS_EventWordPositions *extract_word_positions(RenderContext *state, ASS_Event *event, double device_x, double device_y);
 
 static bool text_info_init(TextInfo* text_info)
 {
@@ -939,7 +940,7 @@ static ASS_Style *handle_selective_style_overrides(RenderContext *state,
                      ASS_OVERRIDE_BIT_COLORS |
                      ASS_OVERRIDE_BIT_BORDER |
                      ASS_OVERRIDE_BIT_ATTRIBUTES;
-
+                     
     // Copies fields even not covered by any of the other bits.
     if (requested & ASS_OVERRIDE_FULL_STYLE)
         *new = *user;
@@ -1150,6 +1151,7 @@ init_render_context(RenderContext *state, ASS_Event *event)
     ass_reset_render_context(state, NULL);
     state->alignment = state->style->Alignment;
     state->justify = state->style->Justify;
+    state->explicit_word_break_pending = false;
 }
 
 static void free_render_context(RenderContext *state)
@@ -2062,7 +2064,6 @@ static void split_style_runs(RenderContext *state)
             last->scale_y != info->scale_y ||
             last->border_style != info->border_style ||
             last->border_x != info->border_x ||
-            last->border_y != info->border_y ||
             last->hspacing != info->hspacing ||
             last->italic != info->italic ||
             last->bold != info->bold ||
@@ -2191,8 +2192,16 @@ static bool parse_events(RenderContext *state, ASS_Event *event)
             fix_glyph_scaling(render_priv, info);
         }
 
-        text_info->length++;
 
+
+        // If an explicit word break override was set, mark this glyph.
+        if (state->explicit_word_break_pending) {
+            info->flags |= GFLAG_WORD_BREAK;
+            state->explicit_word_break_pending = false;
+        }
+        
+        text_info->length++;
+        
         state->effect_type = EF_NONE;
         state->effect_timing = 0;
         state->effect_skip_timing = 0;
@@ -2816,11 +2825,12 @@ static void add_background(RenderContext *state, EventImages *event_images)
  * \brief Main ass rendering function, glues everything together
  * \param event event to render
  * \param event_images struct containing resulting images, will also be initialized
- * Process event, appending resulting ASS_Image's to images_root.
+ * \param word_positions if not NULL, word position information will be stored here
+ * \return true if rendering was successful
  */
-static bool
+bool
 ass_render_event(RenderContext *state, ASS_Event *event,
-                 EventImages *event_images)
+                 EventImages *event_images, ASS_EventWordPositions **word_positions)
 {
     ASS_Renderer *render_priv = state->renderer;
     if (event->Style >= render_priv->track->n_styles) {
@@ -3031,6 +3041,10 @@ ass_render_event(RenderContext *state, ASS_Event *event,
 
     if (state->border_style == 4)
         add_background(state, event_images);
+
+    if (word_positions) {
+        *word_positions = extract_word_positions(state, event, device_x, device_y);
+    }
 
     ass_shaper_cleanup(state->shaper, text_info);
     free_render_context(state);
@@ -3286,8 +3300,16 @@ fix_collisions(ASS_Renderer *render_priv, EventImages *imgs, int cnt)
             s.x0 = imgs[i].left;
             s.x1 = imgs[i].left + imgs[i].width;
             shift = fit_rect(&s, used, &cnt_used, imgs[i].shift_direction);
-            if (shift)
-                shift_event(render_priv, imgs + i, shift);
+            if (shift) {
+                shift_event(render_priv, &imgs[i], shift);
+                
+                // Store collision shift in the event's render_priv
+                ASS_RenderPriv *rpriv = get_render_priv(render_priv, imgs[i].event);
+                rpriv->collision_shift = shift;
+            } else {
+                ASS_RenderPriv *rpriv = get_render_priv(render_priv, imgs[i].event);
+                rpriv->collision_shift = 0;
+            }
             // make it fixed
             priv->top = imgs[i].top;
             priv->height = imgs[i].height;
@@ -3393,7 +3415,7 @@ ASS_Image *ass_render_frame(ASS_Renderer *priv, ASS_Track *track,
                     realloc(priv->eimg,
                             priv->eimg_size * sizeof(EventImages));
             }
-            if (ass_render_event(&priv->state, event, priv->eimg + cnt))
+            if (ass_render_event(&priv->state, event, priv->eimg + cnt, NULL))
                 cnt++;
         }
     }
@@ -3463,4 +3485,250 @@ void ass_frame_unref(ASS_Image *img)
         ass_aligned_free(priv->buffer);
         free(priv);
     } while (img);
+}
+
+/**
+ * \brief Helper function to finalize the current word.
+ *
+ * This function creates a new ASS_WordInfo entry in result using the current
+ * word text and bounding box information. It uses the provided baseline and
+ * vertical collision shift.
+ *
+ * \param result         pointer to the ASS_EventWordPositions structure
+ * \param word_idx       pointer to integer that tracks how many words have been finalized
+ * \param cur_word_buf   buffer containing the text of the current word
+ * \param in_word        pointer to boolean indicating if we're currently building a word
+ * \param cur_word_len   pointer to the current word buffer length
+ * \param min_x          left edge of bounding box for this word
+ * \param max_x          right edge of bounding box for this word
+ * \param asc            ascender in pixels for this word
+ * \param desc           descender in pixels for this word
+ * \param baseline_y     baseline y-position in pixels for the current line
+ * \param vert_shift     additional vertical shift (collision shift)
+ */
+static void finalize_current_word(
+    ASS_EventWordPositions *result, int *word_idx,
+    char *cur_word_buf, bool *in_word, int *cur_word_len,
+    int min_x, int max_x, int asc, int desc,
+    int baseline_y, int vert_shift)
+{
+    ASS_WordInfo *W = &result->words[*word_idx];
+    (*word_idx)++;
+    W->text = strdup(cur_word_buf);
+    // Compute top as (baseline - asc) then add the vertical collision shift.
+    int top_y = baseline_y - asc + vert_shift;
+    W->x = min_x;
+    W->y = top_y;
+    W->width = max_x - min_x;
+    W->height = asc + desc;
+    *in_word = false;
+    *cur_word_len = 0;
+    cur_word_buf[0] = '\0';
+}
+
+/**
+ * \brief Extract final word positions from fully–laid–out glyphs.
+ *
+ * This function iterates the glyph array in visual order (using the reordering map)
+ * and finalizes a word when encountering:
+ *  - a space character,
+ *  - a non‐visible glyph (skip/newline),
+ *  - or when a glyph’s flags include the explicit word break marker (GFLAG_WORD_BREAK).
+ *
+ * It uses the current baseline (updated from glyphs’ pos.y) for vertical placement,
+ * then adds any collision shift (obtained from fix_collisions).
+ *
+ * \param state current render context
+ * \param event event being rendered
+ * \param device_x device coordinate offset in X (already applied elsewhere)
+ * \param device_y device coordinate offset in Y (already applied elsewhere)
+ * \return pointer to an ASS_EventWordPositions structure containing the segmented word
+ *         bounding boxes and stripped text.
+ */
+static ASS_EventWordPositions *extract_word_positions(RenderContext *state,
+                                                      ASS_Event *event,
+                                                      double device_x,
+                                                      double device_y)
+{
+    TextInfo *text_info = &state->text_info;
+    FriBidiStrIndex *cmap = ass_shaper_get_reorder_map(state->shaper);
+    if (!cmap || text_info->length == 0)
+        return NULL; // no visible glyphs
+
+    // Acquire vertical collision shift if any was applied during collision resolution.
+    ASS_RenderPriv *rpriv = get_render_priv(state->renderer, event);
+    int collision_shift = (rpriv ? rpriv->collision_shift : 0);
+
+    ASS_EventWordPositions *result = calloc(1, sizeof(*result));
+    if (!result)
+        return NULL;
+
+    // Allocate enough space for worst-case: each glyph is a separate word.
+    result->words = calloc(text_info->length, sizeof(ASS_WordInfo));
+    if (!result->words) {
+        free(result);
+        return NULL;
+    }
+
+    // Build a stripped version of the original event text (removing override tags).
+    {
+        int n = (int) strlen(event->Text);
+        result->stripped_text = calloc(n + 1, 1);
+        if (!result->stripped_text) {
+            free(result->words);
+            free(result);
+            return NULL;
+        }
+        const char *src = event->Text;
+        char *dst = result->stripped_text;
+        while (*src) {
+            if (*src == '{') {
+                const char *brace = strchr(src, '}');
+                if (!brace) break; // malformed tag
+                src = brace + 1;
+            } else {
+                *dst++ = *src++;
+            }
+        }
+        *dst = '\0';
+    }
+
+    result->event_id = event->ReadOrder;
+    int word_idx = 0;
+    bool in_word = false;
+    int cur_word_min_x = 0, cur_word_max_x = 0;
+    int cur_word_asc = 0, cur_word_desc = 0;
+    char cur_word_buf[1024];
+    int cur_word_len = 0;
+    cur_word_buf[0] = '\0';
+
+    // Track the current baseline (in device pixels)
+    int current_baseline_y = 0;
+
+    for (int i = 0; i < text_info->length; i++) {
+        GlyphInfo *g = &text_info->glyphs[cmap[i]];
+
+        // If the explicit word break flag is set on this glyph, finalize the current word.
+        if ((g->flags & GFLAG_WORD_BREAK) && in_word) {
+            int baseline_y_to_use = current_baseline_y ? current_baseline_y : (int)(g->pos.y >> 6);
+            finalize_current_word(result, &word_idx,
+                cur_word_buf, &in_word, &cur_word_len,
+                cur_word_min_x, cur_word_max_x,
+                cur_word_asc, cur_word_desc,
+                baseline_y_to_use, collision_shift);
+        }
+
+        if (g->skip || g->symbol == '\n' || g->symbol == 0) {
+            if (in_word) {
+                int baseline_y_to_use = current_baseline_y ? current_baseline_y : (int)(g->pos.y >> 6);
+                finalize_current_word(result, &word_idx,
+                    cur_word_buf, &in_word, &cur_word_len,
+                    cur_word_min_x, cur_word_max_x,
+                    cur_word_asc, cur_word_desc,
+                    baseline_y_to_use, collision_shift);
+            }
+            continue;
+        }
+
+        // If the glyph is a space, finalize the current word.
+        if (g->symbol == ' ') {
+            if (in_word) {
+                int baseline_y_to_use = current_baseline_y ? current_baseline_y : (int)(g->pos.y >> 6);
+                finalize_current_word(result, &word_idx,
+                    cur_word_buf, &in_word, &cur_word_len,
+                    cur_word_min_x, cur_word_max_x,
+                    cur_word_asc, cur_word_desc,
+                    baseline_y_to_use, collision_shift);
+            }
+            continue;
+        }
+
+        // Update current baseline if valid.
+        if (!g->skip && g->symbol != '\n' && g->symbol != 0 && g->pos.y != 0)
+            current_baseline_y = (int)(g->pos.y >> 6);
+
+        // Start a new word if not already in one.
+        if (!in_word) {
+            in_word = true;
+            cur_word_len = 0;
+            cur_word_buf[0] = '\0';
+            int gx = (int)(g->pos.x >> 6);
+            cur_word_min_x = gx;
+            cur_word_max_x = gx;
+            cur_word_asc  = (int)(g->asc >> 6);
+            cur_word_desc = (int)(g->desc >> 6);
+        } else {
+            int gx = (int)(g->pos.x >> 6);
+            if (gx < cur_word_min_x)
+                cur_word_min_x = gx;
+            int rx = gx + (int)(g->advance.x >> 6);
+            if (rx > cur_word_max_x)
+                cur_word_max_x = rx;
+            int asc = (int)(g->asc >> 6);
+            int desc = (int)(g->desc >> 6);
+            if (asc > cur_word_asc)
+                cur_word_asc = asc;
+            if (desc > cur_word_desc)
+                cur_word_desc = desc;
+        }
+
+        // Convert the Unicode codepoint to UTF-8.
+        char utf8[8];
+        int utf8_len = 0;
+        unsigned c = g->symbol;
+        if (c < 0x80) {
+            utf8[utf8_len++] = (char)c;
+        } else if (c < 0x800) {
+            utf8[utf8_len++] = (char)(0xC0 | (c >> 6));
+            utf8[utf8_len++] = (char)(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            utf8[utf8_len++] = (char)(0xE0 | (c >> 12));
+            utf8[utf8_len++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            utf8[utf8_len++] = (char)(0x80 | (c & 0x3F));
+        } else {
+            utf8[utf8_len++] = (char)(0xF0 | (c >> 18));
+            utf8[utf8_len++] = (char)(0x80 | ((c >> 12) & 0x3F));
+            utf8[utf8_len++] = (char)(0x80 | ((c >> 6) & 0x3F));
+            utf8[utf8_len++] = (char)(0x80 | (c & 0x3F));
+        }
+
+        // Append the UTF-8 bytes to the current word buffer.
+        if (cur_word_len + utf8_len < (int)sizeof(cur_word_buf) - 1) {
+            memcpy(&cur_word_buf[cur_word_len], utf8, utf8_len);
+            cur_word_len += utf8_len;
+            cur_word_buf[cur_word_len] = '\0';
+        }
+    }
+
+    // Finalize the word if we ended still in a word.
+    if (in_word && text_info->length > 0) {
+        GlyphInfo *last_g = &text_info->glyphs[cmap[text_info->length - 1]];
+        int baseline_y_to_use = current_baseline_y ? current_baseline_y : (int)(last_g->pos.y >> 6);
+        finalize_current_word(result, &word_idx,
+            cur_word_buf, &in_word, &cur_word_len,
+            cur_word_min_x, cur_word_max_x,
+            cur_word_asc, cur_word_desc,
+            baseline_y_to_use, collision_shift);
+    }
+
+    result->n_words = word_idx;
+
+    // Clamp each word's bounding box to the renderer's screen bounds.
+    ASS_Renderer *rnd = state->renderer;
+    for (int i = 0; i < word_idx; i++) {
+        int x0 = result->words[i].x;
+        int y0 = result->words[i].y;
+        int w0 = result->words[i].width;
+        int h0 = result->words[i].height;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x0 + w0 > rnd->width)
+            x0 = rnd->width - w0;
+        if (y0 + h0 > rnd->height)
+            y0 = rnd->height - h0;
+        result->words[i].x = x0;
+        result->words[i].y = y0;
+    }
+
+    return result;
 }
